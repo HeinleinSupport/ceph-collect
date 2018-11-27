@@ -1,5 +1,5 @@
 # Ceph Collect
-The *ceph-collect* tool is used by [42on](http://www.42on.com/) to gather diagnostic information from a Ceph cluster.
+The *ceph-collect* tool is used to gather diagnostic information from a Ceph cluster.
 
 The output from the tool is used to assist customers in case of questions, support or emergency situations.
 
@@ -8,19 +8,19 @@ The tarball the tool creates contains vital information for our engineers to sup
 This tool does **NOT** collect any user (object) data contents nor authentication credentials from a Ceph cluster.
 
 # Usage
-The first step is to download the tool from [Github](https://github.com/42on/ceph-collect).
+The first step is to download the tool from [Github](https://github.com/HeinleinSupport/ceph-collect).
 
 You can either clone the Git repository or download just the tool:
 
 ## Git clone
 ```
-git clone https://github.com/42on/ceph-collect
+git clone https://github.com/HeinleinSupport/ceph-collect
 cd ceph-collect
 ```
 
 ## Fetch from Github
 ```
-curl -SL -o ceph-collect https://raw.githubusercontent.com/42on/ceph-collect/master/ceph-collect
+curl -SL -o ceph-collect https://raw.githubusercontent.com/HeinleinSupport/ceph-collect/master/ceph-collect
 chmod +x ceph-collect
 ```
 
@@ -72,7 +72,7 @@ root@mon01:~#
 ### One-liner
 If you want to run this tool without downloading it, you can run it directly using this one-liner:
 
-``curl -SL https://raw.githubusercontent.com/42on/ceph-collect/master/ceph-collect|python``
+``curl -SL https://raw.githubusercontent.com/HeinleinSupport/ceph-collect/master/ceph-collect | python``
 
 It will not save the tool on disk, it just runs the Python code and saves the output in */tmp*.
 
@@ -83,7 +83,7 @@ This tarball should be just a few kilobytes in size.
 
 For example: */tmp/ceph-collect_20160729_150304.tar.gz*
 
-Send this tarball to [info@42on.com](mailto:info@42on.com) for analyses.
+Send this tarball to [support@heinlein-support.de](mailto:support@heinlein-support.de) for analyses.
 
 # License
 This tool was written by [42on](http://www.42on.com/) to help Ceph customers quickly.

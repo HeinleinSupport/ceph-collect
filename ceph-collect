@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-ceph-collect is a tool used by 42on to gather information from a Ceph cluster
+ceph-collect is a tool used to gather information from a Ceph cluster
 in case of support or emergency assistance.
 
 The tool gathers information from the Ceph cluster and creates a tarball in /tmp
