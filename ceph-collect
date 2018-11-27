@@ -21,7 +21,7 @@ import subprocess
 import rados
 
 CEPH_CONFIG_FILE = '/etc/ceph/ceph.conf'
-CEPH_TIMEOUT = 120
+CEPH_TIMEOUT = 10
 
 # Logging configuration
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -115,7 +115,7 @@ def get_osd_info(r, timeout):
     info['map'] = ceph_mon_command(r, 'osd getmap', timeout)
     info['metadata'] = ceph_mon_command(r, 'osd metadata', timeout)
     info['perf'] = ceph_mon_command(r, 'osd perf', timeout)
-    info['bench'] = ceph_mon_command(r, 'tell osd.* bench', timeout)
+    info['bench'] = spawn('ceph --format plain tell osd.* bench') + '\n'
     return info
 
 
