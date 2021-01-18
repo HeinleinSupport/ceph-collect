@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 ceph-collect is a tool used to gather information from a Ceph cluster
 in case of support or emergency assistance.
@@ -18,7 +18,8 @@ import tempfile
 import tarfile
 import json
 import subprocess
-import rados
+
+
 
 CEPH_CONFIG_FILE = '/etc/ceph/ceph.conf'
 CEPH_TIMEOUT = 10
@@ -28,6 +29,15 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 LOGGER = logging.getLogger()
 
+try:
+    import rados
+except ImportError:
+    if sys.version_info[0] == 3:
+        LOGGER.error("rados module not found, try running with python2")
+        sys.exit(1)
+    else:
+        LOGGER.error("rados module not found, try running with python3")
+        sys.exit(1)
 
 # Functions to gather Ceph information
 def write_file(filename, content):
@@ -78,7 +88,7 @@ def spawn(command, shell=True):
     return result.strip()
 
 
-def ceph_mon_command(r, command, timeout, output_format='plain'):
+def ceph_mon_command(r, command, timeout, output_format):
     """
     Using librados directly execute a command inside the Monitors
     """
@@ -87,51 +97,50 @@ def ceph_mon_command(r, command, timeout, output_format='plain'):
     return buf
 
 
-def get_health_info(r, timeout):
+def get_health_info(r, timeout, output_format):
     info = dict()
-    info['stat'] = ceph_mon_command(r, 'health', timeout)
-    info['detail'] = ceph_mon_command(r, 'health detail', timeout)
-    info['df'] = ceph_mon_command(r, 'df', timeout)
-    info['report'] = ceph_mon_command(r, 'report', timeout)
+    info['stat'] = ceph_mon_command(r, 'health', timeout, output_format)
+    info['df'] = ceph_mon_command(r, 'df', timeout, output_format)
+    info['report'] = ceph_mon_command(r, 'report', timeout, output_format)
     return info
 
 
-def get_mon_info(r, timeout):
+def get_mon_info(r, timeout, output_format):
     info = dict()
-    info['stat'] = ceph_mon_command(r, 'mon stat', timeout)
-    info['dump'] = ceph_mon_command(r, 'mon dump', timeout)
-    info['map'] = ceph_mon_command(r, 'mon getmap', timeout)
-    info['metadata'] = ceph_mon_command(r, 'mon metadata', timeout)
+    info['stat'] = ceph_mon_command(r, 'mon stat', timeout, output_format)
+    info['dump'] = ceph_mon_command(r, 'mon dump', timeout, output_format)
+    info['map'] = ceph_mon_command(r, 'mon getmap', timeout, output_format)
+    info['metadata'] = ceph_mon_command(r, 'mon metadata', timeout, output_format)
     return info
 
 
-def get_osd_info(r, timeout):
+def get_osd_info(r, timeout, output_format):
     info = dict()
-    info['tree'] = ceph_mon_command(r, 'osd tree', timeout)
-    info['df'] = ceph_mon_command(r, 'osd df', timeout)
-    info['dump'] = ceph_mon_command(r, 'osd dump', timeout)
-    info['stat'] = ceph_mon_command(r, 'osd stat', timeout)
-    info['crushmap'] = ceph_mon_command(r, 'osd getcrushmap', timeout)
-    info['map'] = ceph_mon_command(r, 'osd getmap', timeout)
-    info['metadata'] = ceph_mon_command(r, 'osd metadata', timeout)
-    info['perf'] = ceph_mon_command(r, 'osd perf', timeout)
-    info['bench'] = spawn('ceph --format plain tell osd.* bench') + '\n'
+    info['tree'] = ceph_mon_command(r, 'osd tree', timeout, output_format)
+    info['df'] = ceph_mon_command(r, 'osd df', timeout, output_format)
+    info['dump'] = ceph_mon_command(r, 'osd dump', timeout, output_format)
+    info['stat'] = ceph_mon_command(r, 'osd stat', timeout, output_format)
+    info['crushmap'] = ceph_mon_command(r, 'osd getcrushmap', timeout, output_format)
+    info['map'] = ceph_mon_command(r, 'osd getmap', timeout, output_format)
+    info['metadata'] = ceph_mon_command(r, 'osd metadata', timeout, output_format)
+    info['perf'] = ceph_mon_command(r, 'osd perf', timeout, output_format)
+    # info['bench'] = spawn('ceph --format plain tell osd.* bench') + '\n'
     return info
 
 
-def get_mds_info(r, timeout):
+def get_mds_info(r, timeout, output_format):
     info = dict()
-    info['dump'] = ceph_mon_command(r, 'mds dump', timeout)
-    info['stat'] = ceph_mon_command(r, 'mds stat', timeout)
-    info['map'] = ceph_mon_command(r, 'mds getmap', timeout)
+    info['dump'] = ceph_mon_command(r, 'mds dump', timeout, output_format)
+    info['stat'] = ceph_mon_command(r, 'mds stat', timeout, output_format)
+    info['map'] = ceph_mon_command(r, 'mds getmap', timeout, output_format)
     return info
 
 
-def get_pg_info(r, timeout):
+def get_pg_info(r, timeout, output_format):
     info = dict()
-    info['stat'] = ceph_mon_command(r, 'pg stat', timeout)
-    info['dump'] = ceph_mon_command(r, 'pg dump', timeout)
-    info['dump_stuck'] = ceph_mon_command(r, 'pg dump_stuck', timeout)
+    info['stat'] = ceph_mon_command(r, 'pg stat', timeout, output_format)
+    info['dump'] = ceph_mon_command(r, 'pg dump', timeout, output_format)
+    info['dump_stuck'] = ceph_mon_command(r, 'pg dump_stuck', timeout, output_format)
     return info
 
 
@@ -140,7 +149,7 @@ def get_ceph_config(ceph_config):
 
 
 def collect_ceph_information(r, ceph_config, output_directory, timeout,
-                             cleanup=True):
+                             output_format, cleanup=True):
     tmpdir = tempfile.mkdtemp()
 
     LOGGER.debug('Using temporary directory %s', tmpdir)
@@ -152,29 +161,37 @@ def collect_ceph_information(r, ceph_config, output_directory, timeout,
     files['lsb_release'] = spawn('lsb_release -a') + b'\n'
 
     LOGGER.info('Gathering overall Ceph information')
-    files['status'] = ceph_mon_command(r, 'status', timeout)
+    files['status'] = ceph_mon_command(r, 'status', timeout, output_format)
     files['version'] = spawn('ceph -v') + b'\n'
-    files['fsid'] = str(r.get_fsid()) + '\n'
-    files['ceph.conf'] = str(get_ceph_config(ceph_config))
+    files['versions'] = ceph_mon_command(r, 'versions', timeout, output_format)
+    files['features'] = ceph_mon_command(r, 'features', timeout, output_format)
+    ##Add if to get around python2/python3 dependencies etc.
+    if sys.version_info[0] == 3:
+        files['fsid'] = bytes(r.get_fsid() + '\n', 'utf-8')
+        files['ceph.conf'] = bytes(get_ceph_config(ceph_config), 'utf-8')
+    else:
+        files['fsid'] = str(r.get_fsid()) + '\n'
+        files['ceph.conf'] = str(get_ceph_config(ceph_config))
+    files['config'] = ceph_mon_command(r, 'config dump', timeout, output_format)
 
     LOGGER.info('Gathering Health information')
-    for key, item in get_health_info(r, timeout).items():
+    for key, item in get_health_info(r, timeout, output_format).items():
         files['health_{0}'.format(key)] = item
 
     LOGGER.info('Gathering MON information')
-    for key, item in get_mon_info(r, timeout).items():
+    for key, item in get_mon_info(r, timeout, output_format).items():
         files['mon_{0}'.format(key)] = item
 
     LOGGER.info('Gathering OSD information')
-    for key, item in get_osd_info(r, timeout).items():
+    for key, item in get_osd_info(r, timeout, output_format).items():
         files['osd_{0}'.format(key)] = item
 
     LOGGER.info('Gathering PG information')
-    for key, item in get_pg_info(r, timeout).items():
+    for key, item in get_pg_info(r, timeout, output_format).items():
         files['pg_{0}'.format(key)] = item
 
     LOGGER.info('Gathering MDS information')
-    for key, item in get_mds_info(r, timeout).items():
+    for key, item in get_mds_info(r, timeout, output_format).items():
         files['mds_{0}'.format(key)] = item
 
     timestr = datetime.datetime.now().strftime("%Y%m%d_%H%I%S")
@@ -184,6 +201,7 @@ def collect_ceph_information(r, ceph_config, output_directory, timeout,
         for filename, content in files.items():
             tmpfile = '{0}/{1}'.format(tmpdir, filename)
             LOGGER.debug('Writing file %s', tmpfile)
+            #write_file(tmpfile, bytes(content, 'utf-8'))
             write_file(tmpfile, content)
             tar.add(name=tmpfile,
                     arcname='ceph-collect_{0}/{1}'.format(timestr, filename))
@@ -197,7 +215,6 @@ def collect_ceph_information(r, ceph_config, output_directory, timeout,
         shutil.rmtree(tmpdir)
     else:
         LOGGER.debug('Not cleaning up temporary directory %s', tmpdir)
-
 
 if __name__ == '__main__':
     RETURN_VALUE = 1
@@ -214,6 +231,8 @@ if __name__ == '__main__':
                         dest='timeout',
                         default=CEPH_TIMEOUT,
                         help='Timeout for Ceph operations')
+    PARSER.add_argument('--format', action='store', dest='output_format',
+                        default='plain', help='output format plain|json')
     PARSER.add_argument('--debug', action='store_true', dest='debug',
                         default=False, help='Debug logging')
     PARSER.add_argument('--no-cleanup', action='store_false', dest='cleanup',
@@ -228,7 +247,8 @@ if __name__ == '__main__':
                                    timeout=ARGS.timeout)
         collect_ceph_information(r=CNX, ceph_config=ARGS.ceph_config,
                                  output_directory=ARGS.output_dir,
-                                 timeout=ARGS.timeout, cleanup=ARGS.cleanup)
+                                 timeout=ARGS.timeout, cleanup=ARGS.cleanup,
+                                 output_format=ARGS.output_format)
         RETURN_VALUE = 0
     except (rados.Error,
             tarfile.TarError,
