@@ -103,17 +103,6 @@ For example: */tmp/ceph-collect_44bc0804-370e-4179-b602-7597306d6196_20240829_15
 
 Send this tarball to [support@heinlein-support.de](mailto:support@heinlein-support.de) for analyses.
 
-## Upload to 42on repository
-You can automatically upload the ceph-collect to the 42on repository by passing the "--upload" parameter. You can also specify a ticket number, customer, and cluster name.
-
-For example:
-``../ceph-collect --upload --ticket CON-999 --customer example.com --friendly-name test_clsuer``
-
-### Upload an already created file
-If your cluster is isolated from the internet, you can upload a pre-created file by passing the ``--upload-file`` parameter. 
-
-The file must adhere to the naming convention ``ceph-collect_${FSID}_$(date +'%Y%m%d_%H%I%S').tar.gz``.
-
 
 # License
 This tool was written by [42on](http://www.42on.com/) to help Ceph customers quickly.
