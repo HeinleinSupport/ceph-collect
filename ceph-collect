@@ -159,6 +159,14 @@ def show_warning_and_get_confirmation():
     warning_text = """
 Before uploading any data, carefully assess the potential risks and implement appropriate security measures to mitigate these threats.
 
+Amongst other details, the collected data may contain:
+    - internal nd external IP addresses and port numbers
+    - internal and external URLs
+    - cluster and fsid
+    - pool names and sizes
+    - version numbers and service details
+    - operating system and hardware details
+
 By uploading data to this system, you acknowledge and agree that:
 
     - You have the necessary permissions and authorization to upload and process the data.
@@ -444,8 +452,7 @@ def get_ceph_config(ceph_config):
 
 def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
                             cleanup=True, device_health=False,
-                            custom_config_filters=[],log_config=False,
-                            terms_accepted=False):
+                            custom_config_filters=[],log_config=False):
     
     config_filters=DEFAULT_CONFIG_FILTERS
     config_filters.extend(custom_config_filters) 
@@ -514,9 +521,6 @@ def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
 
         return data.encode('utf-8')
     
-    if not terms_accepted:
-        show_warning_and_get_confirmation()
-
     tmpdir = tempfile.mkdtemp()
 
     LOGGER.debug('Using temporary directory %s', tmpdir)
@@ -722,8 +726,9 @@ def upload_tarball(ARGS, tarball):
     tarball_filename=os.path.basename(tarball)
 
     check_tarball_name(ARGS, tarball_filename)
+    endpoint = ARGS.upload_endpoint % {'bucket':ARGS.upload_bucket}
 
-    LOGGER.info('Uploading "' + str(tarball) + '"')
+    LOGGER.info('Uploading "' + str(tarball) + '" to ' + endpoint)
     LOGGER.debug('Upload endpoint: "' + str(ARGS.upload_endpoint)+ '"')
     LOGGER.debug('Upload bucket: "' + str(ARGS.upload_bucket) + '"')
     LOGGER.debug('Upload headers: "' + str(ARGS.upload_headers) + '"')
@@ -739,7 +744,7 @@ def upload_tarball(ARGS, tarball):
     for header  in ARGS.upload_headers:
         cmd=cmd + " -H '" + str(header) + "'"
     
-    cmd=cmd + " " + ARGS.upload_endpoint % {'bucket':ARGS.upload_bucket} + '/{0}'.format(tarball_filename)
+    cmd=cmd + " " + endpoint + '/{0}'.format(tarball_filename)
 
     result = spawn (
         cmd,
@@ -787,6 +792,11 @@ if __name__ == '__main__':
     RETURN_VALUE = 1
     tarball=ARGS.upload_file
 
+    if ARGS.upload_file or ARGS.upload:
+        if not ARGS.terms_accepted:
+            print("\nUpload endpoint is: " + ARGS.upload_endpoint % {'bucket':ARGS.upload_bucket})
+            show_warning_and_get_confirmation()
+
     if not tarball:
         try:
             CNX = get_rados_connection(ceph_config=ARGS.ceph_config,
@@ -796,8 +806,7 @@ if __name__ == '__main__':
                                         output_directory=ARGS.output_dir,
                                         timeout=ARGS.timeout, cleanup=ARGS.cleanup,
                                         custom_config_filters=ARGS.custom_config_filter or [],
-                                        log_config=ARGS.log_gathered_config,
-                                        terms_accepted=ARGS.terms_accepted)
+                                        log_config=ARGS.log_gathered_config)
             RETURN_VALUE = 0
         except (rados.Error,
                 tarfile.TarError,
