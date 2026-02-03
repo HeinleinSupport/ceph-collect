@@ -141,6 +141,10 @@ PARSER.add_argument('--add-fragmentation-score', action='store_true',
                     dest='add_fragmentation_score', default=False,
                     help='Adds block fragmentation score info')
 
+PARSER.add_argument('--bench', action='store_true',
+                    dest='bench', default=False,
+                    help='Run disk IO benchmarks (slow)')
+
 ARGS = PARSER.parse_args()
 FLAGS = {key: value for key, value in vars(ARGS).items() if key.startswith('add')}
 
@@ -371,7 +375,7 @@ def get_mon_info(r, timeout, output_format):
     return info
 
 
-def get_osd_info(r, timeout, output_format):
+def get_osd_info(r, timeout, output_format, bench=False):
     info = dict()
     info['tree'] = ceph_mon_command(r, 'osd tree', timeout, output_format)
     info['df'] = ceph_mon_command(r, 'osd df', timeout, output_format)
@@ -381,7 +385,8 @@ def get_osd_info(r, timeout, output_format):
     info['map'] = ceph_mon_command(r, 'osd getmap', timeout, output_format)
     info['metadata'] = ceph_mon_command(r, 'osd metadata', timeout, output_format)
     info['perf'] = ceph_mon_command(r, 'osd perf', timeout, output_format)
-    # info['bench'] = spawn('ceph --format plain tell osd.* bench') + '\n'
+    if bench and output_format != 'plain':	# it does not exist in plain, and it is slow.
+        info['bench'] = spawn(f'ceph --format {output_format} tell osd.* bench') + b'\n'
     return info
 
 def get_orch_info(r, timeout, output_format):
@@ -452,7 +457,8 @@ def get_ceph_config(ceph_config):
 
 def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
                             cleanup=True, device_health=False,
-                            custom_config_filters=[],log_config=False):
+                            custom_config_filters=[],log_config=False,
+                            bench=False):
     
     config_filters=DEFAULT_CONFIG_FILTERS
     config_filters.extend(custom_config_filters) 
@@ -600,9 +606,9 @@ def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
         files['mon_{0}.json'.format(key)] = item
 
     LOGGER.info('Gathering OSD information')
-    for key, item in get_osd_info(r, timeout, 'plain').items():
+    for key, item in get_osd_info(r, timeout, 'plain', bench).items():
         files['osd_{0}'.format(key)] = item
-    for key, item in get_osd_info(r, timeout, 'json').items():
+    for key, item in get_osd_info(r, timeout, 'json', bench).items():
         files['osd_{0}.json'.format(key)] = item
 
     LOGGER.info('Gathering PG information')
@@ -806,7 +812,7 @@ if __name__ == '__main__':
                                         output_directory=ARGS.output_dir,
                                         timeout=ARGS.timeout, cleanup=ARGS.cleanup,
                                         custom_config_filters=ARGS.custom_config_filter or [],
-                                        log_config=ARGS.log_gathered_config)
+                                        log_config=ARGS.log_gathered_config, bench=ARGS.bench)
             RETURN_VALUE = 0
         except (rados.Error,
                 tarfile.TarError,
