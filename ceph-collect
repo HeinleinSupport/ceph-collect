@@ -39,14 +39,17 @@ DATETIME_FORMAT="%Y%m%d_%H%M%S"
 CEPH_CONFIG_FILE = '/etc/ceph/ceph.conf'
 CEPH_TIMEOUT = 10
 
-CC_VERSION='1.0'
+CC_VERSION='1.1'
 
 
-S3_ENDPOINT = "https://%(bucket)s.fig-nl-dc1.s3.fairbanks.nl"
-S3_BUCKET = 'ceph-collect'
-S3_HEADERS = ['x-amz-acl: bucket-owner-full-control']
-S3_TIMEOUT = 30
-CURL_COMMAND ='curl'
+UPLOAD_ENDPOINT = "https://oc-extern.heinlein-support.de/s/ndlZcGXDEQLgJvc"
+UPLOAD_PASSWORD = 'dummy-pass'
+
+# UPLOAD_ENDPOINT = "https://%(bucket)s.fig-nl-dc1.s3.fairbanks.nl"
+UPLOAD_BUCKET = 'ceph-collect'
+UPLOAD_HEADERS = ['x-amz-acl: bucket-owner-full-control']
+UPLOAD_TIMEOUT = 30
+CURL_COMMAND ='curl'    # or 'curl -k' ...
 
 DEFAULT_CONFIG_FILTERS = [
     '(?i)password',
@@ -63,7 +66,7 @@ class OSDCommandError(Exception):
         super().__init__("OSD command failed with error code {}: {}".format(error_code, output))
 
 # Version check
-REMOTE_URL = 'https://raw.githubusercontent.com/42on/ceph-collect/master/ceph-collect'
+REMOTE_URL = 'https://raw.githubusercontent.com/HeinleinSupport/ceph-collect/master/ceph-collect'
 LOCAL_FILE = __file__
 
 # Logging configuration
@@ -96,20 +99,23 @@ PARSER.add_argument('--log-gathered-config', action='store_true',
                     help='Log on INFO the config after the purge')
 PARSER.add_argument('--upload', action='store_true',
                     dest='upload', default=False,
-                    help='Upload the ceph-collect to 42on repository.')
+                    help='Upload the ceph-collect to an OpenCloud public share or S3 repository.')
 PARSER.add_argument('--upload-header', action='append',
-                    dest='upload_headers', default=S3_HEADERS,
-                    help='Upload the ceph-collect to 42on repository.')
+                    dest='upload_headers', default=UPLOAD_HEADERS,
+                    help='Additional HTTP headers used with uploads.')
 PARSER.add_argument('--upload-endpoint', action='store',
-                    dest='upload_endpoint', default=S3_ENDPOINT,
-                    help='Upload the ceph-collect to 42on repository.')
+                    dest='upload_endpoint', default=UPLOAD_ENDPOINT,
+                    help='OpenCloud or S3 upload destination for ceph-collect.')
 PARSER.add_argument('--upload-bucket', action='store',
-                    dest='upload_bucket', default=S3_BUCKET,
-                    help='Upload the ceph-collect to 42on repository.')
+                    dest='upload_bucket', default=UPLOAD_BUCKET,
+                    help='Upload bucket used with an S3 repository.')
+PARSER.add_argument('--upload-password', action='store',
+                    dest='upload_password', default=UPLOAD_PASSWORD,
+                    help='Upload credential used with OpenCloud endpoints.')
 
 PARSER.add_argument('--upload-timeout', action='store', type=int,
-                    dest='upload_timeout', default=S3_TIMEOUT,
-                    help='Upload the ceph-collect to 42on repository.')
+                    dest='upload_timeout', default=UPLOAD_TIMEOUT,
+                    help='Timeout for uploading the ceph-collect archive.')
 
 PARSER.add_argument('--upload-file', action='store', dest='upload_file',
                     default='',
@@ -736,26 +742,78 @@ def upload_tarball(ARGS, tarball):
 
     LOGGER.info('Uploading "' + str(tarball) + '" to ' + endpoint)
     LOGGER.debug('Upload endpoint: "' + str(ARGS.upload_endpoint)+ '"')
-    LOGGER.debug('Upload bucket: "' + str(ARGS.upload_bucket) + '"')
     LOGGER.debug('Upload headers: "' + str(ARGS.upload_headers) + '"')
     LOGGER.debug('Upload timeout: "' + str(ARGS.upload_timeout) + '"')
-    
+
+    ARGS.upload_headers.append(build_tags(ARGS))
+
+    if check_opencloud_status_php(ARGS, endpoint):
+        return upload_tarball_opencloud(ARGS, endpoint, tarball)
+    upload_tarball_s3(ARGS, endpoint, tarball)
+
+
+def check_opencloud_status_php(ARGS, endpoint):
+    s = endpoint.split('://')
+    proto = 'https://'
+    if len(s) > 1:
+      proto = s[0] + '://'
+      s = s[1:]
+    s = s[0].split('/')
+    for i in range(len(s)):
+        if b'OpenCloud' in spawn(CURL_COMMAND + " -s '" + proto + '/'.join(s[:i+1]) + "/status.php'"):
+            return True
+    return False
+
+
+def upload_tarball_opencloud(ARGS, endpoint, tarball):
+    tarball_filename=os.path.basename(tarball)
+    # endpoint == https://oc.example.com/s/dnlZcGXDEQLgJvc
+    # -> curl -v -T tarball.tar.gz https://oc.example.com/remote.php/dav/public-files/dnlZcGXDEQLgJvc/tarball.tar.gz
+    if '/s/' in endpoint:
+        # It is a public share: opencloud requires a special webdav route then. Yes, it has a misleading 'remote.php' in it ...
+        endpoint = re.sub('/s/', '/remote.php/dav/public-files/', endpoint)
+    endpoint = re.sub(r'/$', '', endpoint)
+
+    LOGGER.info('Endpoint type: OpenCloud ' + endpoint)
+
     cmd=CURL_COMMAND + " " + \
         "--max-time " + str(ARGS.upload_timeout) + ' ' + \
-        "--request PUT --upload-file '" + \
-        str(tarball) + "'"
-    
-    ARGS.upload_headers.append(build_tags(ARGS))
+        "--upload-file '" + str(tarball) + "'"
+
+    if ARGS.upload_password:
+        cmd = cmd + " --user ':" + ARGS.upload_password + "'"
 
     for header  in ARGS.upload_headers:
         cmd=cmd + " -H '" + str(header) + "'"
-    
+
     cmd=cmd + " " + endpoint + '/{0}'.format(tarball_filename)
 
     result = spawn (
         cmd,
         raise_on_error=True
     )
+
+
+def upload_tarball_s3(ARGS, endpoint, tarball):
+    LOGGER.debug('Upload bucket: "' + str(ARGS.upload_bucket) + '"')
+
+    tarball_filename=os.path.basename(tarball)
+
+    cmd=CURL_COMMAND + " " + \
+        "--max-time " + str(ARGS.upload_timeout) + ' ' + \
+        "--request PUT --upload-file '" + \
+        str(tarball) + "'"
+
+    for header  in ARGS.upload_headers:
+        cmd=cmd + " -H '" + str(header) + "'"
+
+    cmd=cmd + " " + endpoint + '/{0}'.format(tarball_filename)
+
+    result = spawn (
+        cmd,
+        raise_on_error=True
+    )
+
 
 @exit_after(ARGS.timeout, None)
 def get_remote_hash(url):
@@ -819,7 +877,7 @@ if __name__ == '__main__':
                 IOError,
                 KeyError,
                 ValueError) as exc:
-            LOGGER.error(exc) 
+            LOGGER.error(exc)
     if ARGS.upload_file or ARGS.upload:
         try:
             upload_tarball (ARGS, tarball)
