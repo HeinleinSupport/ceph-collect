@@ -748,8 +748,12 @@ def upload_tarball(ARGS, tarball):
     ARGS.upload_headers.append(build_tags(ARGS))
 
     if check_opencloud_status_php(ARGS, endpoint):
-        return upload_tarball_opencloud(ARGS, endpoint, tarball)
-    upload_tarball_s3(ARGS, endpoint, tarball)
+        result = upload_tarball_opencloud(ARGS, endpoint, tarball)
+    else:
+        result = upload_tarball_s3(ARGS, endpoint, tarball)
+
+    if len(result):
+        print(result[:400]) # print max 200 bytes. Not an entire web page
 
 
 def check_opencloud_status_php(ARGS, endpoint):
@@ -781,14 +785,15 @@ def upload_tarball_opencloud(ARGS, endpoint, tarball):
         "--upload-file '" + str(tarball) + "'"
 
     if ARGS.upload_password:
-        cmd = cmd + " --user ':" + ARGS.upload_password + "'"
+        # username is not required, but nice info.
+        cmd = cmd + " --user 'ceph-collect:" + ARGS.upload_password + "'"
 
     for header  in ARGS.upload_headers:
         cmd=cmd + " -H '" + str(header) + "'"
 
     cmd=cmd + " " + endpoint + '/{0}'.format(tarball_filename)
 
-    result = spawn (
+    return spawn (
         cmd,
         raise_on_error=True
     )
@@ -809,7 +814,7 @@ def upload_tarball_s3(ARGS, endpoint, tarball):
 
     cmd=cmd + " " + endpoint + '/{0}'.format(tarball_filename)
 
-    result = spawn (
+    return spawn (
         cmd,
         raise_on_error=True
     )
