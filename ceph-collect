@@ -42,10 +42,9 @@ CEPH_TIMEOUT = 10
 CC_VERSION='1.1'
 
 
-UPLOAD_ENDPOINT = "https://oc-extern.heinlein-support.de/s/ndlZcGXDEQLgJvc"
-UPLOAD_PASSWORD = 'dummy-pass'
+UPLOAD_ENDPOINT = os.environ.get('CC_UPLOAD_ENDPOINT', '')
+UPLOAD_PASSWORD = 'placeholder-password'
 
-# UPLOAD_ENDPOINT = "https://%(bucket)s.fig-nl-dc1.s3.fairbanks.nl"
 UPLOAD_BUCKET = 'ceph-collect'
 UPLOAD_HEADERS = ['x-amz-acl: bucket-owner-full-control']
 UPLOAD_TIMEOUT = 30
@@ -105,7 +104,7 @@ PARSER.add_argument('--upload-header', action='append',
                     help='Additional HTTP headers used with uploads.')
 PARSER.add_argument('--upload-endpoint', action='store',
                     dest='upload_endpoint', default=UPLOAD_ENDPOINT,
-                    help='OpenCloud or S3 upload destination for ceph-collect.')
+                    help='OpenCloud or S3 upload destination for ceph-collect. Defaults via env variable CC_UPLOAD_ENDPOINT')
 PARSER.add_argument('--upload-bucket', action='store',
                     dest='upload_bucket', default=UPLOAD_BUCKET,
                     help='Upload bucket used with an S3 repository.')
@@ -297,7 +296,7 @@ def spawn(command, shell=True, raise_on_error=False):
     p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=shell)
     (result, _) = p.communicate()
     if raise_on_error and p.returncode != 0:
-        raise RuntimeError("Process exited abnormally")
+        raise RuntimeError("Process exited abnormally: " + str(result))
     return result.strip()
 
 @exit_after(ARGS.timeout, b'')
@@ -707,7 +706,7 @@ def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
     return tarball
 
 def check_tarball_name(ARGS, tarball_name):
-    LOGGER.info('Parsing "{0}"'.format(tarball_name))
+    LOGGER.debug('Parsing "{0}"'.format(tarball_name))
     try:
         s = tarball_name.split('_')[1:]
         s[-1]=s[-1].split('.')[0]
@@ -740,7 +739,7 @@ def upload_tarball(ARGS, tarball):
     check_tarball_name(ARGS, tarball_filename)
     endpoint = ARGS.upload_endpoint % {'bucket':ARGS.upload_bucket}
 
-    LOGGER.info('Uploading "' + str(tarball) + '" to ' + endpoint)
+    LOGGER.info('Uploading "' + str(tarball) + '"')
     LOGGER.debug('Upload endpoint: "' + str(ARGS.upload_endpoint)+ '"')
     LOGGER.debug('Upload headers: "' + str(ARGS.upload_headers) + '"')
     LOGGER.debug('Upload timeout: "' + str(ARGS.upload_timeout) + '"')
@@ -753,7 +752,7 @@ def upload_tarball(ARGS, tarball):
         result = upload_tarball_s3(ARGS, endpoint, tarball)
 
     if len(result):
-        print(result[:400]) # print max 200 bytes. Not an entire web page
+        print(result[:400]) # print part of the response, if any. Not an entire web page.
 
 
 def check_opencloud_status_php(ARGS, endpoint):
@@ -780,9 +779,12 @@ def upload_tarball_opencloud(ARGS, endpoint, tarball):
 
     LOGGER.info('Endpoint type: OpenCloud ' + endpoint)
 
-    cmd=CURL_COMMAND + " " + \
+    cmd=CURL_COMMAND + " --progress-bar --fail-with-body " + \
         "--max-time " + str(ARGS.upload_timeout) + ' ' + \
         "--upload-file '" + str(tarball) + "'"
+
+    if ARGS.debug:
+        cmd = cmd + " --verbose"
 
     if ARGS.upload_password:
         # username is not required, but nice info.
@@ -804,10 +806,13 @@ def upload_tarball_s3(ARGS, endpoint, tarball):
 
     tarball_filename=os.path.basename(tarball)
 
-    cmd=CURL_COMMAND + " " + \
+    cmd=CURL_COMMAND + " --progress-bar --fail-with-body " + \
         "--max-time " + str(ARGS.upload_timeout) + ' ' + \
         "--request PUT --upload-file '" + \
         str(tarball) + "'"
+
+    if ARGS.debug:
+        cmd = cmd + " --verbose"
 
     for header  in ARGS.upload_headers:
         cmd=cmd + " -H '" + str(header) + "'"
@@ -858,10 +863,14 @@ if __name__ == '__main__':
         LOGGER.setLevel(logging.DEBUG)
 
 
-    RETURN_VALUE = 1
+    RETURN_VALUE = None
     tarball=ARGS.upload_file
 
     if ARGS.upload_file or ARGS.upload:
+        if not ARGS.upload_endpoint:
+            print("ERROR: no upload endpoint given. Please either\n\tset the env variable CC_UPLOAD_ENDPOINT\n\tor use the command line option --upload-endpoint ...")
+            sys.exit(1)
+
         if not ARGS.terms_accepted:
             print("\nUpload endpoint is: " + ARGS.upload_endpoint % {'bucket':ARGS.upload_bucket})
             show_warning_and_get_confirmation()
@@ -883,13 +892,19 @@ if __name__ == '__main__':
                 KeyError,
                 ValueError) as exc:
             LOGGER.error(exc)
+            RETURN_VALUE =1
     if ARGS.upload_file or ARGS.upload:
         try:
             upload_tarball (ARGS, tarball)
-        except SystemExit:
-            pass
+            if RETURN_VALUE == None: RETURN_VALUE = 0
+        except (SystemExit, RuntimeError) as e:
+            LOGGER.info("Upload failed")
+            print(str(e)[:400])     # expose result
+            RETURN_VALUE = 1
         except :
             LOGGER.exception("Upload failed")
             RETURN_VALUE = 1
+
+    if RETURN_VALUE == None: RETURN_VALUE = 1   # should not happen
 
     sys.exit(RETURN_VALUE)
