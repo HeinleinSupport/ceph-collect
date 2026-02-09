@@ -39,14 +39,16 @@ DATETIME_FORMAT="%Y%m%d_%H%M%S"
 CEPH_CONFIG_FILE = '/etc/ceph/ceph.conf'
 CEPH_TIMEOUT = 10
 
-CC_VERSION='1.0'
+CC_VERSION='1.1'
 
 
-S3_ENDPOINT = "https://%(bucket)s.fig-nl-dc1.s3.fairbanks.nl"
-S3_BUCKET = 'ceph-collect'
-S3_HEADERS = ['x-amz-acl: bucket-owner-full-control']
-S3_TIMEOUT = 30
-CURL_COMMAND ='curl'
+UPLOAD_ENDPOINT = os.environ.get('CC_UPLOAD_ENDPOINT', '')
+UPLOAD_PASSWORD = 'placeholder-password'
+
+UPLOAD_BUCKET = 'ceph-collect'
+UPLOAD_HEADERS = ['x-amz-acl: bucket-owner-full-control']
+UPLOAD_TIMEOUT = 30
+CURL_COMMAND ='curl'    # or 'curl -k' ...
 
 DEFAULT_CONFIG_FILTERS = [
     '(?i)password',
@@ -63,7 +65,7 @@ class OSDCommandError(Exception):
         super().__init__("OSD command failed with error code {}: {}".format(error_code, output))
 
 # Version check
-REMOTE_URL = 'https://raw.githubusercontent.com/42on/ceph-collect/master/ceph-collect'
+REMOTE_URL = 'https://raw.githubusercontent.com/HeinleinSupport/ceph-collect/master/ceph-collect'
 LOCAL_FILE = __file__
 
 # Logging configuration
@@ -96,20 +98,23 @@ PARSER.add_argument('--log-gathered-config', action='store_true',
                     help='Log on INFO the config after the purge')
 PARSER.add_argument('--upload', action='store_true',
                     dest='upload', default=False,
-                    help='Upload the ceph-collect to 42on repository.')
+                    help='Upload the ceph-collect to an OpenCloud public share or S3 repository.')
 PARSER.add_argument('--upload-header', action='append',
-                    dest='upload_headers', default=S3_HEADERS,
-                    help='Upload the ceph-collect to 42on repository.')
+                    dest='upload_headers', default=UPLOAD_HEADERS,
+                    help='Additional HTTP headers used with uploads.')
 PARSER.add_argument('--upload-endpoint', action='store',
-                    dest='upload_endpoint', default=S3_ENDPOINT,
-                    help='Upload the ceph-collect to 42on repository.')
+                    dest='upload_endpoint', default=UPLOAD_ENDPOINT,
+                    help='OpenCloud or S3 upload destination for ceph-collect. Defaults via env variable CC_UPLOAD_ENDPOINT')
 PARSER.add_argument('--upload-bucket', action='store',
-                    dest='upload_bucket', default=S3_BUCKET,
-                    help='Upload the ceph-collect to 42on repository.')
+                    dest='upload_bucket', default=UPLOAD_BUCKET,
+                    help='Upload bucket used with an S3 repository.')
+PARSER.add_argument('--upload-password', action='store',
+                    dest='upload_password', default=UPLOAD_PASSWORD,
+                    help='Upload credential used with OpenCloud endpoints.')
 
 PARSER.add_argument('--upload-timeout', action='store', type=int,
-                    dest='upload_timeout', default=S3_TIMEOUT,
-                    help='Upload the ceph-collect to 42on repository.')
+                    dest='upload_timeout', default=UPLOAD_TIMEOUT,
+                    help='Timeout for uploading the ceph-collect archive.')
 
 PARSER.add_argument('--upload-file', action='store', dest='upload_file',
                     default='',
@@ -141,6 +146,10 @@ PARSER.add_argument('--add-fragmentation-score', action='store_true',
                     dest='add_fragmentation_score', default=False,
                     help='Adds block fragmentation score info')
 
+PARSER.add_argument('--bench', action='store_true',
+                    dest='bench', default=False,
+                    help='Run disk IO benchmarks (slow)')
+
 ARGS = PARSER.parse_args()
 FLAGS = {key: value for key, value in vars(ARGS).items() if key.startswith('add')}
 
@@ -158,6 +167,14 @@ if not ARGS.upload_file:
 def show_warning_and_get_confirmation():
     warning_text = """
 Before uploading any data, carefully assess the potential risks and implement appropriate security measures to mitigate these threats.
+
+Amongst other details, the collected data may contain:
+    - internal nd external IP addresses and port numbers
+    - internal and external URLs
+    - cluster and fsid
+    - pool names and sizes
+    - version numbers and service details
+    - operating system and hardware details
 
 By uploading data to this system, you acknowledge and agree that:
 
@@ -279,7 +296,7 @@ def spawn(command, shell=True, raise_on_error=False):
     p = subprocess.Popen(command, stdout=subprocess.PIPE, shell=shell)
     (result, _) = p.communicate()
     if raise_on_error and p.returncode != 0:
-        raise RuntimeError("Process exited abnormally")
+        raise RuntimeError("Process exited abnormally: " + str(result))
     return result.strip()
 
 @exit_after(ARGS.timeout, b'')
@@ -363,7 +380,7 @@ def get_mon_info(r, timeout, output_format):
     return info
 
 
-def get_osd_info(r, timeout, output_format):
+def get_osd_info(r, timeout, output_format, bench=False):
     info = dict()
     info['tree'] = ceph_mon_command(r, 'osd tree', timeout, output_format)
     info['df'] = ceph_mon_command(r, 'osd df', timeout, output_format)
@@ -373,7 +390,8 @@ def get_osd_info(r, timeout, output_format):
     info['map'] = ceph_mon_command(r, 'osd getmap', timeout, output_format)
     info['metadata'] = ceph_mon_command(r, 'osd metadata', timeout, output_format)
     info['perf'] = ceph_mon_command(r, 'osd perf', timeout, output_format)
-    # info['bench'] = spawn('ceph --format plain tell osd.* bench') + '\n'
+    if bench and output_format != 'plain':	# it does not exist in plain, and it is slow.
+        info['bench'] = spawn(f'ceph --format {output_format} tell osd.* bench') + b'\n'
     return info
 
 def get_orch_info(r, timeout, output_format):
@@ -445,7 +463,7 @@ def get_ceph_config(ceph_config):
 def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
                             cleanup=True, device_health=False,
                             custom_config_filters=[],log_config=False,
-                            terms_accepted=False):
+                            bench=False):
     
     config_filters=DEFAULT_CONFIG_FILTERS
     config_filters.extend(custom_config_filters) 
@@ -514,9 +532,6 @@ def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
 
         return data.encode('utf-8')
     
-    if not terms_accepted:
-        show_warning_and_get_confirmation()
-
     tmpdir = tempfile.mkdtemp()
 
     LOGGER.debug('Using temporary directory %s', tmpdir)
@@ -596,9 +611,9 @@ def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
         files['mon_{0}.json'.format(key)] = item
 
     LOGGER.info('Gathering OSD information')
-    for key, item in get_osd_info(r, timeout, 'plain').items():
+    for key, item in get_osd_info(r, timeout, 'plain', bench).items():
         files['osd_{0}'.format(key)] = item
-    for key, item in get_osd_info(r, timeout, 'json').items():
+    for key, item in get_osd_info(r, timeout, 'json', bench).items():
         files['osd_{0}.json'.format(key)] = item
 
     LOGGER.info('Gathering PG information')
@@ -691,7 +706,7 @@ def collect_ceph_information(r, flags, ceph_config, output_directory, timeout,
     return tarball
 
 def check_tarball_name(ARGS, tarball_name):
-    LOGGER.info('Parsing "{0}"'.format(tarball_name))
+    LOGGER.debug('Parsing "{0}"'.format(tarball_name))
     try:
         s = tarball_name.split('_')[1:]
         s[-1]=s[-1].split('.')[0]
@@ -722,29 +737,93 @@ def upload_tarball(ARGS, tarball):
     tarball_filename=os.path.basename(tarball)
 
     check_tarball_name(ARGS, tarball_filename)
+    endpoint = ARGS.upload_endpoint % {'bucket':ARGS.upload_bucket}
 
     LOGGER.info('Uploading "' + str(tarball) + '"')
     LOGGER.debug('Upload endpoint: "' + str(ARGS.upload_endpoint)+ '"')
-    LOGGER.debug('Upload bucket: "' + str(ARGS.upload_bucket) + '"')
     LOGGER.debug('Upload headers: "' + str(ARGS.upload_headers) + '"')
     LOGGER.debug('Upload timeout: "' + str(ARGS.upload_timeout) + '"')
-    
-    cmd=CURL_COMMAND + " " + \
-        "--max-time " + str(ARGS.upload_timeout) + ' ' + \
-        "--request PUT --upload-file '" + \
-        str(tarball) + "'"
-    
+
     ARGS.upload_headers.append(build_tags(ARGS))
+
+    if check_opencloud_status_php(ARGS, endpoint):
+        result = upload_tarball_opencloud(ARGS, endpoint, tarball)
+    else:
+        result = upload_tarball_s3(ARGS, endpoint, tarball)
+
+    if len(result):
+        print(result[:400]) # print part of the response, if any. Not an entire web page.
+
+
+def check_opencloud_status_php(ARGS, endpoint):
+    s = endpoint.split('://')
+    proto = 'https://'
+    if len(s) > 1:
+      proto = s[0] + '://'
+      s = s[1:]
+    s = s[0].split('/')
+    for i in range(len(s)):
+        if b'OpenCloud' in spawn(CURL_COMMAND + " -s '" + proto + '/'.join(s[:i+1]) + "/status.php'"):
+            return True
+    return False
+
+
+def upload_tarball_opencloud(ARGS, endpoint, tarball):
+    tarball_filename=os.path.basename(tarball)
+    # endpoint == https://oc.example.com/s/dnlZcGXDEQLgJvc
+    # -> curl -v -T tarball.tar.gz https://oc.example.com/remote.php/dav/public-files/dnlZcGXDEQLgJvc/tarball.tar.gz
+    if '/s/' in endpoint:
+        # It is a public share: opencloud requires a special webdav route then. Yes, it has a misleading 'remote.php' in it ...
+        endpoint = re.sub('/s/', '/remote.php/dav/public-files/', endpoint)
+    endpoint = re.sub(r'/$', '', endpoint)
+
+    LOGGER.info('Endpoint type: OpenCloud ' + endpoint)
+
+    cmd=CURL_COMMAND + " --progress-bar --fail-with-body " + \
+        "--max-time " + str(ARGS.upload_timeout) + ' ' + \
+        "--upload-file '" + str(tarball) + "'"
+
+    if ARGS.debug:
+        cmd = cmd + " --verbose"
+
+    if ARGS.upload_password:
+        # username is not required, but nice info.
+        cmd = cmd + " --user 'ceph-collect:" + ARGS.upload_password + "'"
 
     for header  in ARGS.upload_headers:
         cmd=cmd + " -H '" + str(header) + "'"
-    
-    cmd=cmd + " " + ARGS.upload_endpoint % {'bucket':ARGS.upload_bucket} + '/{0}'.format(tarball_filename)
 
-    result = spawn (
+    cmd=cmd + " " + endpoint + '/{0}'.format(tarball_filename)
+
+    return spawn (
         cmd,
         raise_on_error=True
     )
+
+
+def upload_tarball_s3(ARGS, endpoint, tarball):
+    LOGGER.debug('Upload bucket: "' + str(ARGS.upload_bucket) + '"')
+
+    tarball_filename=os.path.basename(tarball)
+
+    cmd=CURL_COMMAND + " --progress-bar --fail-with-body " + \
+        "--max-time " + str(ARGS.upload_timeout) + ' ' + \
+        "--request PUT --upload-file '" + \
+        str(tarball) + "'"
+
+    if ARGS.debug:
+        cmd = cmd + " --verbose"
+
+    for header  in ARGS.upload_headers:
+        cmd=cmd + " -H '" + str(header) + "'"
+
+    cmd=cmd + " " + endpoint + '/{0}'.format(tarball_filename)
+
+    return spawn (
+        cmd,
+        raise_on_error=True
+    )
+
 
 @exit_after(ARGS.timeout, None)
 def get_remote_hash(url):
@@ -784,8 +863,17 @@ if __name__ == '__main__':
         LOGGER.setLevel(logging.DEBUG)
 
 
-    RETURN_VALUE = 1
+    RETURN_VALUE = None
     tarball=ARGS.upload_file
+
+    if ARGS.upload_file or ARGS.upload:
+        if not ARGS.upload_endpoint:
+            print("ERROR: no upload endpoint given. Please either\n\tset the env variable CC_UPLOAD_ENDPOINT\n\tor use the command line option --upload-endpoint ...")
+            sys.exit(1)
+
+        if not ARGS.terms_accepted:
+            print("\nUpload endpoint is: " + ARGS.upload_endpoint % {'bucket':ARGS.upload_bucket})
+            show_warning_and_get_confirmation()
 
     if not tarball:
         try:
@@ -796,22 +884,27 @@ if __name__ == '__main__':
                                         output_directory=ARGS.output_dir,
                                         timeout=ARGS.timeout, cleanup=ARGS.cleanup,
                                         custom_config_filters=ARGS.custom_config_filter or [],
-                                        log_config=ARGS.log_gathered_config,
-                                        terms_accepted=ARGS.terms_accepted)
+                                        log_config=ARGS.log_gathered_config, bench=ARGS.bench)
             RETURN_VALUE = 0
         except (rados.Error,
                 tarfile.TarError,
                 IOError,
                 KeyError,
                 ValueError) as exc:
-            LOGGER.error(exc) 
+            LOGGER.error(exc)
+            RETURN_VALUE =1
     if ARGS.upload_file or ARGS.upload:
         try:
             upload_tarball (ARGS, tarball)
-        except SystemExit:
-            pass
+            if RETURN_VALUE == None: RETURN_VALUE = 0
+        except (SystemExit, RuntimeError) as e:
+            LOGGER.info("Upload failed")
+            print(str(e)[:400])     # expose result
+            RETURN_VALUE = 1
         except :
             LOGGER.exception("Upload failed")
             RETURN_VALUE = 1
+
+    if RETURN_VALUE == None: RETURN_VALUE = 1   # should not happen
 
     sys.exit(RETURN_VALUE)
